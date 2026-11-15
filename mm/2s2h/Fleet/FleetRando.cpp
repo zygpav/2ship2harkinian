@@ -511,7 +511,13 @@ char* FleetRando_DumpStaticData(void) {
     nlohmann::json checks = nlohmann::json::array();
     for (RandoCheckId check : checkPool) {
         if (IsNamed(CheckName(check))) {
-            checks.push_back({ { "name", CheckName(check) } });
+            // Fleet Combo: what the vanilla game keeps here, for the vanilla-placement fill.
+            const RandoItemId vanilla = Rando::StaticData::Checks.at(check).randoItemId;
+            const RandoStaticItem& vanillaItem = Rando::StaticData::Items[vanilla];
+            checks.push_back({ { "name", CheckName(check) },
+                               { "vanilla", ItemName(vanilla) },
+                               { "vanillaCategory", CategoryName(vanillaItem) },
+                               { "vanillaAdvancement", IsAdvancement(vanillaItem) } });
         }
     }
 

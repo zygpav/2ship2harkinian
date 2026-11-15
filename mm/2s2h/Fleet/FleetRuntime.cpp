@@ -121,6 +121,23 @@ void GrantSharedTier(const std::string& key, int current, const nlohmann::json& 
     Rando::GiveItem(grant);
 }
 
+// Fleet Combo: hearts are shared between the worlds as quarter hearts (containers * 4 + pieces).
+int ReadQuarterHearts() {
+    return (gSaveContext.save.saveInfo.playerData.healthCapacity / 0x10) * 4 + static_cast<int>(GET_QUEST_HEART_PIECE_COUNT);
+}
+
+void SetQuarterHearts(int quarters) {
+    quarters = std::clamp(quarters, 12, 80); // 3 to 20 hearts
+    auto& player = gSaveContext.save.saveInfo.playerData;
+    const int previousCapacity = player.healthCapacity;
+    player.healthCapacity = static_cast<int16_t>((quarters / 4) * 0x10);
+    gSaveContext.save.saveInfo.inventory.questItems =
+        (gSaveContext.save.saveInfo.inventory.questItems & 0x0FFFFFFF) |
+        (static_cast<uint32_t>(quarters % 4) << QUEST_HEART_PIECE_COUNT);
+    player.health = static_cast<int16_t>(
+        std::min<int>(player.healthCapacity, player.health + std::max(0, player.healthCapacity - previousCapacity)));
+}
+
 nlohmann::json ReadSharedTiers() {
     return { { "bows", static_cast<int>(CUR_UPG_VALUE(UPG_QUIVER)) },
              { "bombBags", static_cast<int>(CUR_UPG_VALUE(UPG_BOMB_BAG)) },
@@ -139,7 +156,8 @@ nlohmann::json ReadSharedTiers() {
              { "zoraMask", static_cast<int>(INV_CONTENT(ITEM_MASK_ZORA) != ITEM_NONE) },
              { "keatonMask", static_cast<int>(INV_CONTENT(ITEM_MASK_KEATON) != ITEM_NONE) },
              { "bunnyHood", static_cast<int>(INV_CONTENT(ITEM_MASK_BUNNY) != ITEM_NONE) },
-             { "maskOfTruth", static_cast<int>(INV_CONTENT(ITEM_MASK_TRUTH) != ITEM_NONE) } };
+             { "maskOfTruth", static_cast<int>(INV_CONTENT(ITEM_MASK_TRUTH) != ITEM_NONE) },
+             { "hearts", ReadQuarterHearts() } };
 }
 
 void SynchronizeSharedTiers() {
@@ -161,6 +179,13 @@ void SynchronizeSharedTiers() {
     for (const auto& entry : shared) {
         const std::string key = entry.at("key");
         const int desired = entry.at("tier");
+        if (key == "hearts") {
+            if (ReadQuarterHearts() != desired) {
+                SetQuarterHearts(desired);
+                changed = true;
+            }
+            continue;
+        }
         for (int attempt = 0; attempt < 16; attempt++) {
             const int previous = ReadSharedTiers().value(key, 0);
             if (previous >= desired) {

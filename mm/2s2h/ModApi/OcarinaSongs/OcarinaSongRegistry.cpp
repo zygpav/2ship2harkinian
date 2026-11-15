@@ -1,3 +1,7 @@
+#include "2s2h/Fleet/FleetGame.h"
+#include "2s2h/Fleet/FleetPortal.h"
+#include <string>
+#include <unordered_map>
 #include "OcarinaSongRegistry.h"
 
 #include <array>
@@ -141,6 +145,18 @@ void OcarinaSongRegistry_Perform(PlayState* play, uint8_t songIndex) {
     }
     if (definition.onPlayed != nullptr) {
         definition.onPlayed(play);
+    }
+    // Fleet Combo: in Termina, an OoT warp song takes Link back to its warp pad in Hyrule.
+    if (FleetGame_IsHosted()) {
+        static const std::unordered_map<std::string, const char*> warpPortals = {
+            { "oot.song.minuet", "warp.minuet" },     { "oot.song.bolero", "warp.bolero" },
+            { "oot.song.serenade", "warp.serenade" }, { "oot.song.requiem", "warp.requiem" },
+            { "oot.song.nocturne", "warp.nocturne" }, { "oot.song.prelude", "warp.prelude" },
+        };
+        auto portal = warpPortals.find((*song)->itemKey);
+        if (portal != warpPortals.end()) {
+            FleetPortal_RequestDeparture(portal->second);
+        }
     }
 }
 

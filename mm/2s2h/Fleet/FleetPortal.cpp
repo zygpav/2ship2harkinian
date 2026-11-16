@@ -80,6 +80,9 @@ void OpenSave() {
 // The first arrival can find 2ship outside gameplay: it opens the slot Fleet names, or starts a new file there.
 void BootIntoPlay(const Arrival& arrival) {
     FleetRuntime_Initialize();
+    // Fleet Combo: the title screen is what turns saving on (Title_Init). Arriving straight into gameplay skips it,
+    // which left Play_Init without a save buffer and crashed the first save (entering Clock Town).
+    gSaveContext.flashSaveAvailable = true;
     gSaveContext.fileNum = arrival.slot;
     if (SaveManager_SlotExists(arrival.slot)) {
         OpenSave();

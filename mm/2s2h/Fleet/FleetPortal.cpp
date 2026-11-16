@@ -13,9 +13,12 @@
 #include <nlohmann/json.hpp>
 
 #include "2s2h/GameInteractor/GameInteractor.h"
+#include "2s2h/CustomMessage/CustomMessage.h"
+#include <libultraship/bridge/consolevariablebridge.h>
 #include "2s2h/Rando/Rando.h"
 #include "2s2h/SaveManager/SaveManager.h"
 #include "2s2h/ShipInit.hpp"
+#include "2s2h/ModApi/Forms/FormRegistry.h"
 
 extern "C" {
 #include "z64.h"
@@ -35,9 +38,21 @@ struct Arrival {
     s32 entrance;
     s32 slot;
     bool cross = false;
+    // Fleet Combo: the Link who crossed: "child"/"adult" and the form he wore (nei.* key).
+    std::string age;
+    std::string form;
 };
 
 std::optional<std::string> sDeparture;
+// Fleet Combo: the "Soar to where?" prompt is open (Song of Soaring in Termina).
+bool sSoaringPrompt = false;
+// Fleet Combo: a registered form (adult Link) to put on once the arrival scene has a player; empty = none.
+std::optional<std::string> sPendingForm;
+
+// Fleet Combo: the doors (Mask Shop / Clock Tower) only travel when this is on; the songs do the travelling.
+bool DoorPortalsEnabled() {
+    return CVarGetInteger("gFleetCombo.DoorPortals", 0) != 0;
+}
 std::optional<Arrival> sArrival;
 
 std::optional<s32> EntranceForPortal(const std::string& portal) {
@@ -55,7 +70,12 @@ void Depart(const std::string& portal) {
     if (FleetRuntime_HasSession()) {
         FleetRuntime_Save();
     }
-    const std::string payload = nlohmann::json{ { "portal", portal }, { "slot", gSaveContext.fileNum } }.dump();
+    const char* form = FormRegistry_GetCurrentKey();
+    const std::string payload = nlohmann::json{ { "portal", portal },
+                                                { "slot", gSaveContext.fileNum },
+                                                { "age", FormRegistry_IsCurrentFormAdult() ? "adult" : "child" },
+                                                { "form", form != nullptr ? form : "" } }
+                                    .dump();
     const FleetDestination destination = { .game = nullptr, .entrance = 0, .payloadJson = payload.c_str() };
     FleetGame_RequestSwitch(&destination);
 }
@@ -84,9 +104,11 @@ void BootIntoPlay(const Arrival& arrival) {
     // which left Play_Init without a save buffer and crashed the first save (entering Clock Town).
     gSaveContext.flashSaveAvailable = true;
     gSaveContext.fileNum = arrival.slot;
+    bool fresh = false;
     if (SaveManager_SlotExists(arrival.slot)) {
         OpenSave();
     } else {
+        fresh = true;
         FleetAutomaticSave automatic;
         Sram_InitNamedSave(arrival.slot, kDefaultPlayerName);
         if (FleetRuntime_HasSession() && !IS_RANDO) {
@@ -100,7 +122,44 @@ void BootIntoPlay(const Arrival& arrival) {
         throw std::runtime_error("MM save does not belong to this Fleet seed");
     }
     Sram_PrepareLoadedSave();
-    if (arrival.entrance >= 0) {
+    if (fresh) {
+        // Fleet Combo: a new Termina file starts with MM's own opening (Skull Kid, the Deku curse, the first cycle)
+        // instead of dropping human Link in Clock Town. Undo the randomizer's first-cycle skip for this file.
+        if (IS_RANDO) {
+            gSaveContext.save.hasTatl = false;
+            CLEAR_WEEKEVENTREG(WEEKEVENTREG_59_04);
+            CLEAR_WEEKEVENTREG(WEEKEVENTREG_31_04);
+            gSaveContext.save.saveInfo.permanentSceneFlags[SCENE_INSIDETOWER].switch0 &= ~(1 << 0);
+            gSaveContext.save.saveInfo.playerData.threeDayResetCount = 0;
+            SET_EQUIP_VALUE(EQUIP_TYPE_SWORD, EQUIP_VALUE_SWORD_KOKIRI);
+            BUTTON_ITEM_EQUIP(0, EQUIP_SLOT_B) = ITEM_SWORD_KOKIRI;
+            SET_EQUIP_VALUE(EQUIP_TYPE_SHIELD, EQUIP_VALUE_SHIELD_HERO);
+        }
+        gSaveContext.save.playerForm = PLAYER_FORM_HUMAN;
+        gSaveContext.save.isFirstCycle = true;
+        gSaveContext.save.day = 0;
+        gSaveContext.save.time = CLOCK_TIME(6, 0) - 1;
+        gSaveContext.respawnFlag = 0;
+        gSaveContext.nextCutsceneIndex = 0xFFEF;
+        gSaveContext.save.cutsceneIndex = 0xFFF0;
+        gSaveContext.save.entrance = ENTRANCE(CUTSCENE, 0);
+        gSaveContext.nextTransitionType = TRANS_TYPE_FADE_BLACK;
+    } else if (!arrival.age.empty()) {
+        // Fleet Combo: arrive as the Link who left Hyrule: MM's own forms by their key, adult Link as a form.
+        s32 nativeForm = -1;
+        for (s32 form = 0; form < PLAYER_FORM_MAX; form++) {
+            if (form == PLAYER_FORM_HUMAN) {
+                continue; // human: child or adult Link, decided by age
+            }
+            const char* key = FormRegistry_GetNativeKey(static_cast<u8>(form));
+            if (key != nullptr && arrival.form == key) {
+                nativeForm = form;
+            }
+        }
+        gSaveContext.save.playerForm = nativeForm >= 0 ? static_cast<u8>(nativeForm) : PLAYER_FORM_HUMAN;
+        sPendingForm = (nativeForm < 0 && arrival.age == "adult") ? std::string(S2H_FORM_KEY_ADULT) : std::string{};
+    }
+    if (!fresh && arrival.entrance >= 0) {
         if (arrival.cross && !FleetRuntime_QueueArrival(arrival.entrance)) {
             throw std::runtime_error("MM rejected an arrival absent from this seed");
         }
@@ -133,8 +192,13 @@ void RegisterPortalHooks() {
     }
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnSceneInit>([](s16 sceneId, s8 spawnNum) {
         FleetRuntime_ObserveScene(sceneId);
+        if (sPendingForm && gSaveContext.gameMode == GAMEMODE_NORMAL) {
+            FormRegistry_ApplyActive(sPendingForm->empty() ? nullptr : sPendingForm->c_str());
+            sPendingForm.reset();
+        }
         // Spawn 1 is the door from South Clock Town; the cycle resets land on the tower's other spawns.
-        if (sceneId == SCENE_INSIDETOWER && spawnNum == 1 && gSaveContext.gameMode == GAMEMODE_NORMAL) {
+        if (sceneId == SCENE_INSIDETOWER && spawnNum == 1 && gSaveContext.gameMode == GAMEMODE_NORMAL &&
+            DoorPortalsEnabled()) {
             sDeparture = kMarketPortal;
         }
     });
@@ -175,13 +239,56 @@ extern "C" void FleetPortal_Arrive(const FleetDestination* arrival) {
         sArrival = Arrival{ payload.at("entrance").get<s32>(), slot, true };
     } else if (const std::optional<s32> entrance = EntranceForPortal(payload.value("portal", ""))) {
         sArrival = Arrival{ .entrance = *entrance, .slot = slot };
+        sArrival->age = payload.value("age", "");
+        sArrival->form = payload.value("form", "");
     }
     if (sArrival) {
         EnterArrival();
     }
 }
 
+// Fleet Combo: Song of Soaring in Termina asks where to fly. z_message.c calls this where the owl map would open.
+extern "C" bool FleetCombo_SoaringPrompt(PlayState* play) {
+    if (!FleetGame_IsHosted() || play == nullptr) {
+        return false;
+    }
+    CustomMessage::Entry entry;
+    entry.msg = "Soar to where?\x11\xC2%gHyrule\x11Termina owl statues%w";
+    CustomMessage::ReplaceColorChars(&entry.msg);
+    CustomMessage::StartTextbox(entry.msg, entry);
+    sSoaringPrompt = true;
+    return true;
+}
+
+extern "C" void Message_OpenSoaringOwlMap(PlayState* play);
+
+void UpdateSoaringPrompt() {
+    if (!sSoaringPrompt || gPlayState == nullptr) {
+        return;
+    }
+    MessageContext* msgCtx = &gPlayState->msgCtx;
+    const u8 state = Message_GetState(msgCtx);
+    if (state == TEXT_STATE_NONE) {
+        sSoaringPrompt = false; // closed some other way
+        return;
+    }
+    if (state != TEXT_STATE_CHOICE || !Message_ShouldAdvance(gPlayState)) {
+        return;
+    }
+    sSoaringPrompt = false;
+    const u8 choice = msgCtx->choiceIndex;
+    Audio_PlaySfx_MessageDecide();
+    Message_CloseTextbox(gPlayState);
+    msgCtx->ocarinaMode = OCARINA_MODE_END;
+    if (choice == 0) {
+        sDeparture = kMarketPortal; // lands in Castle Town Market, outside the Mask Shop
+    } else if (gSaveContext.save.saveInfo.playerData.owlActivationFlags != 0) {
+        Message_OpenSoaringOwlMap(gPlayState);
+    }
+}
+
 extern "C" void FleetPortal_FrameEnd(void) {
+    UpdateSoaringPrompt();
     FleetDestination destination = {};
     std::string payload;
     if (FleetRuntime_TakeDeparture(destination, payload)) {

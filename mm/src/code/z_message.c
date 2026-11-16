@@ -5520,6 +5520,26 @@ s16 D_801D0464[] = {
     0x1B8E,
 };
 
+bool FleetCombo_SoaringPrompt(PlayState* play);
+
+// Fleet Combo: what Song of Soaring does natively, for the "owl statues" answer of the Fleet prompt.
+void Message_OpenSoaringOwlMap(PlayState* play) {
+    PauseContext* pauseCtx = &play->pauseCtx;
+    pauseCtx->unk_2C8 = pauseCtx->pageIndex;
+    pauseCtx->unk_2CA = pauseCtx->cursorPoint[4];
+    pauseCtx->pageIndex = PAUSE_ITEM;
+    pauseCtx->state = PAUSE_STATE_OWL_WARP_0;
+    func_800F4A10(play);
+    pauseCtx->pageIndex = PAUSE_MAP;
+    gSaveContext.prevHudVisibility = HUD_VISIBILITY_A_B;
+    Interface_SetBButtonInterfaceDoAction(play, DO_ACTION_STOP);
+    GameState_SetFramerateDivisor(&play->state, 2);
+    if (ShrinkWindow_Letterbox_GetSizeTarget() != 0) {
+        ShrinkWindow_Letterbox_SetSizeTarget(0);
+    }
+    Audio_PlaySfx_PauseMenuOpenOrClose(1);
+}
+
 void Message_Update(PlayState* play) {
     static u8 D_801D0468 = 0;
     MessageContext* msgCtx = &play->msgCtx;
@@ -6004,6 +6024,12 @@ void Message_Update(PlayState* play) {
                         play->msgCtx.ocarinaMode = OCARINA_MODE_1B;
                         sLastPlayedSong = 0xFF;
                     } else if (!msgCtx->ocarinaSongEffectActive) {
+                        // Fleet Combo: inside Fleet, Soaring first asks: Hyrule or the owl statues.
+                        if (FleetCombo_SoaringPrompt(play)) {
+                            sLastPlayedSong = 0xFF;
+                            play->msgCtx.ocarinaMode = OCARINA_MODE_PROCESS_RESTRICTED_SONG;
+                            break;
+                        }
                         if (gSaveContext.save.saveInfo.playerData.owlActivationFlags != 0) {
                             pauseCtx->unk_2C8 = pauseCtx->pageIndex;
                             pauseCtx->unk_2CA = pauseCtx->cursorPoint[4];

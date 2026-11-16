@@ -1,3 +1,5 @@
+#include <libultraship/bridge/consolevariablebridge.h>
+#include "2s2h/Fleet/FleetGame.h"
 #include "2s2h/ModApi/ProgressiveItems/ProgressiveItems.h"
 #include "CustomItemRegistry.h"
 
@@ -831,6 +833,10 @@ bool CustomItemRegistry_IsAgeMet(uint8_t ageRequirement) {
     }
     if (gSaveContext.save.playerForm != PLAYER_FORM_HUMAN) {
         return false;
+    }
+    // Fleet Combo: any Link (child or adult) uses every item; only the transformation forms keep their limits.
+    if (FleetGame_IsHosted() && CVarGetInteger("gFleetCombo.AnyAgeItems", 1) != 0) {
+        return true;
     }
     const bool wantsAdult = ageRequirement == S2H_CUSTOM_ITEM_AGE_ADULT;
     return wantsAdult == FormRegistry_IsCurrentFormAdult();

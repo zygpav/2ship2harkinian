@@ -513,11 +513,20 @@ char* FleetRando_DumpStaticData(void) {
         if (IsNamed(CheckName(check))) {
             // Fleet Combo: what the vanilla game keeps here, for the vanilla-placement fill.
             const RandoItemId vanilla = Rando::StaticData::Checks.at(check).randoItemId;
-            const RandoStaticItem& vanillaItem = Rando::StaticData::Items[vanilla];
-            checks.push_back({ { "name", CheckName(check) },
-                               { "vanilla", ItemName(vanilla) },
-                               { "vanillaCategory", CategoryName(vanillaItem) },
-                               { "vanillaAdvancement", IsAdvancement(vanillaItem) } });
+            // Randomizer-only checks have no vanilla item: the host gives them junk and keeps NEI items out.
+            const bool hasVanilla = vanilla != RI_NONE && vanilla != RI_UNKNOWN && Rando::StaticData::Items.contains(vanilla);
+            if (hasVanilla) {
+                const RandoStaticItem& vanillaItem = Rando::StaticData::Items.at(vanilla);
+                checks.push_back({ { "name", CheckName(check) },
+                                   { "vanilla", ItemName(vanilla) },
+                                   { "vanillaCategory", CategoryName(vanillaItem) },
+                                   { "vanillaAdvancement", IsAdvancement(vanillaItem) } });
+            } else {
+                checks.push_back({ { "name", CheckName(check) },
+                                   { "vanilla", "" },
+                                   { "vanillaCategory", "none" },
+                                   { "vanillaAdvancement", false } });
+            }
         }
     }
 

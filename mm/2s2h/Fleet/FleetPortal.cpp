@@ -156,6 +156,13 @@ void BootIntoPlay(const Arrival& arrival) {
                 nativeForm = form;
             }
         }
+        // Only keep a form whose mask this world has: Link takes a form off with its mask.
+        static const ItemId kFormMasks[PLAYER_FORM_MAX] = { ITEM_MASK_FIERCE_DEITY, ITEM_MASK_GORON, ITEM_MASK_ZORA,
+                                                            ITEM_MASK_DEKU, ITEM_NONE };
+        if (nativeForm >= 0 && (kFormMasks[nativeForm] == ITEM_NONE ||
+                                INV_CONTENT(kFormMasks[nativeForm]) != kFormMasks[nativeForm])) {
+            nativeForm = -1;
+        }
         gSaveContext.save.playerForm = nativeForm >= 0 ? static_cast<u8>(nativeForm) : PLAYER_FORM_HUMAN;
         sPendingForm = (nativeForm < 0 && arrival.age == "adult") ? std::string(S2H_FORM_KEY_ADULT) : std::string{};
     }

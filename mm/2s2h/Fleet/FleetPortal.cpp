@@ -199,6 +199,10 @@ void RegisterPortalHooks() {
     }
     GameInteractor::Instance->RegisterGameHook<GameInteractor::OnSceneInit>([](s16 sceneId, s8 spawnNum) {
         FleetRuntime_ObserveScene(sceneId);
+        // Fleet Combo: Song of Soaring travels between the worlds, so every file inside Fleet knows it.
+        if (gSaveContext.gameMode == GAMEMODE_NORMAL && !CHECK_QUEST_ITEM(QUEST_SONG_SOARING)) {
+            SET_QUEST_ITEM(QUEST_SONG_SOARING);
+        }
         if (sPendingForm && gSaveContext.gameMode == GAMEMODE_NORMAL) {
             FormRegistry_ApplyActive(sPendingForm->empty() ? nullptr : sPendingForm->c_str());
             sPendingForm.reset();

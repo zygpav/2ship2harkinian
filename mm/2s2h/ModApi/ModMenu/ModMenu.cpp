@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <cstring>
 #include <deque>
+#include <map>
+#include <set>
 #include <string>
 #include <utility>
 #include <vector>
@@ -210,6 +212,36 @@ void PointAtComboValues(RegisteredWidget& registered) {
     }
 }
 
+
+// Fleet Combo: mods each add their own menu pages. Gather them into one "NEI" section, one page per category, each
+// mod's settings under a header with its own page name; mod test tools go to Dev Tools.
+struct MenuHome {
+    std::string section;
+    std::string sidebar;
+    std::string header; // empty: no header
+};
+
+MenuHome RemapModMenu(const std::string& section, const std::string& sidebar) {
+    if (section != "Mods") {
+        return { section, sidebar, "" };
+    }
+    static const std::map<std::string, std::string> kCategory = {
+        { "Majora's Mask", "Items & Masks" },  { "Ocarina of Time", "Items & Masks" }, { "Items", "Items & Masks" },
+        { "Equipment", "Equipment" },          { "Ikana Shield", "Equipment" },        { "Partners", "Companions" },
+        { "Companions", "Companions" },        { "Gameplay", "Gameplay" },
+    };
+    if (sidebar == "Item Drop Tester" || sidebar == "Animation Viewer" || sidebar == "Debug") {
+        return { "Dev Tools", "Mod Tools", sidebar };
+    }
+    auto category = kCategory.find(sidebar);
+    if (category != kCategory.end()) {
+        return { "NEI", category->second, sidebar == category->second ? std::string{} : sidebar };
+    }
+    return { "NEI", "Other", sidebar };
+}
+
+std::set<std::string> sHeadersAdded; // "sidebar|header"
+
 bool StoreWidget(const S2HModMenuWidget* widget, const char* anchor, bool after) {
     if (!IsValidWidget(widget)) {
         return false;
@@ -218,8 +250,28 @@ bool StoreWidget(const S2HModMenuWidget* widget, const char* anchor, bool after)
     // A mod built against an older header passes a shorter struct; the missing tail stays zero.
     std::memcpy(&registered.definition, widget, std::min<size_t>(widget->structSize, sizeof(S2HModMenuWidget)));
     CopyComboValues(widget, registered);
-    registered.section = widget->section;
-    registered.sidebar = widget->sidebar;
+    const MenuHome home = RemapModMenu(widget->section, widget->sidebar);
+    const bool remapped = home.section != widget->section || home.sidebar != widget->sidebar;
+    registered.section = home.section;
+    registered.sidebar = home.sidebar;
+    if (remapped) {
+        registered.definition.column = 0; // gathered pages are one tidy column
+        if (!home.header.empty() && sHeadersAdded.insert(home.sidebar + "|" + home.header).second) {
+            for (const auto type : { S2H_MOD_MENU_SEPARATOR, S2H_MOD_MENU_TEXT }) {
+                RegisteredWidget header = {};
+                header.definition.structSize = sizeof(header.definition);
+                header.definition.type = type;
+                header.definition.column = 0;
+                header.section = home.section;
+                header.sidebar = home.sidebar;
+                header.label = type == S2H_MOD_MENU_TEXT ? home.header : home.header + "##separator";
+                sWidgets.push_back(std::move(header));
+                if (IsMenuBuilt()) {
+                    AddWidget(sWidgets.back());
+                }
+            }
+        }
+    }
     registered.label = widget->label;
     registered.cvar = widget->cvar == nullptr ? "" : widget->cvar;
     registered.tooltip = widget->tooltip == nullptr ? "" : widget->tooltip;
@@ -243,6 +295,21 @@ bool ModMenu_RegisterSidebar(const char* section, const char* sidebar, const cha
     if (section == nullptr || section[0] == '\0' || sidebar == nullptr || sidebar[0] == '\0' ||
         selectionCvar == nullptr || selectionCvar[0] == '\0' || columns < 1 || columns > 3) {
         return false;
+    }
+    const MenuHome home = RemapModMenu(section, sidebar);
+    if (home.section != section || home.sidebar != sidebar) {
+        // Gathered pages: one column, and the NEI section remembers its own selected page.
+        const bool known = std::any_of(sSidebars.begin(), sSidebars.end(), [&](const auto& registered) {
+            return registered.section == home.section && registered.sidebar == home.sidebar;
+        });
+        if (!known) {
+            sSidebars.push_back({ home.section, home.sidebar,
+                                  home.section == "NEI" ? "gFleetCombo.Menu.NEIPage" : selectionCvar, 1 });
+            if (IsMenuBuilt()) {
+                AddSidebar(sSidebars.back());
+            }
+        }
+        return true;
     }
     sSidebars.push_back({ section, sidebar, selectionCvar, columns });
     if (IsMenuBuilt()) {

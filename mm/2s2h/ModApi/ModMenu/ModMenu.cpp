@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <deque>
+#include <iterator>
 #include <map>
 #include <set>
 #include <string>
@@ -13,6 +14,7 @@
 #include <spdlog/spdlog.h>
 
 #include "2s2h/BenGui/BenMenu.h"
+#include "2s2h/BenGui/BenGui.hpp"
 
 namespace BenGui {
 extern std::shared_ptr<BenMenu> mBenMenu;
@@ -31,6 +33,7 @@ struct RegisteredWidget {
     bool after = false;
     std::vector<std::string> values;
     std::vector<const char*> valuePointers;
+    bool pageWidget = false; // Fleet Combo: a gathered NEI page
 };
 
 struct RegisteredSidebar {
@@ -117,6 +120,8 @@ void RunModCallback(WidgetInfo& info) {
     }
 }
 
+void DrawGatheredPage(WidgetInfo& info);
+
 void AddWidget(const RegisteredWidget& registered) {
     const S2HModMenuWidget& definition = registered.definition;
     WidgetPath path = { registered.section, registered.sidebar, (SectionColumns)definition.column };
@@ -132,7 +137,9 @@ void AddWidget(const RegisteredWidget& registered) {
         widget.CVar(registered.cvar.c_str());
     }
     ApplyOptions(widget, registered);
-    if (definition.onChange != nullptr) {
+    if (registered.pageWidget) {
+        widget.CustomFunction(DrawGatheredPage);
+    } else if (definition.onChange != nullptr) {
         if (definition.type == S2H_MOD_MENU_CUSTOM) {
             widget.CustomFunction(RunModCallback);
         } else {
@@ -213,12 +220,13 @@ void PointAtComboValues(RegisteredWidget& registered) {
 }
 
 
-// Fleet Combo: mods each add their own menu pages. Gather them into one "NEI" section, one page per category, each
-// mod's settings under a header with its own page name; mod test tools go to Dev Tools.
+// Fleet Combo: mods each add their own menu pages. Gather them into one "NEI" section, one page per category. Each
+// page is drawn by a single custom widget: every mod gets a collapsible header holding its settings, and mod test
+// tools go to Dev Tools. Drawing the gathered settings here does not depend on the menu's per-sidebar column rules.
 struct MenuHome {
     std::string section;
     std::string sidebar;
-    std::string header; // empty: no header
+    std::string header;
 };
 
 MenuHome RemapModMenu(const std::string& section, const std::string& sidebar) {
@@ -235,48 +243,218 @@ MenuHome RemapModMenu(const std::string& section, const std::string& sidebar) {
     }
     auto category = kCategory.find(sidebar);
     if (category != kCategory.end()) {
-        return { "NEI", category->second, sidebar == category->second ? std::string{} : sidebar };
+        return { "NEI", category->second, sidebar };
     }
     return { "NEI", "Other", sidebar };
 }
 
-std::set<std::string> sHeadersAdded; // "sidebar|header"
+struct GatheredGroup {
+    std::string name;
+    std::vector<RegisteredWidget*> widgets; // deque elements never move
+};
+
+struct GatheredPage {
+    std::string section;
+    std::string sidebar;
+    std::string widgetName;
+    std::vector<GatheredGroup> groups;
+};
+
+std::deque<GatheredPage> sGatheredPages;
+std::deque<RegisteredWidget> sGatheredWidgets;
+const char* const kFleetComboPage = "##gathered.NEI.Fleet Combo";
+
+void DrawGatheredWidget(RegisteredWidget& registered) {
+    const auto& definition = registered.definition;
+    const char* label = registered.label.c_str();
+    const char* cvar = registered.cvar.c_str();
+    const char* tooltip = registered.tooltip.c_str();
+    bool changed = false;
+    ImGui::PushID(&registered);
+    switch (definition.type) {
+        case S2H_MOD_MENU_CHECKBOX:
+            changed = UIWidgets::CVarCheckbox(label, cvar,
+                                              UIWidgets::CheckboxOptions()
+                                                  .DefaultValue(definition.defaultInt != 0)
+                                                  .Tooltip(tooltip)
+                                                  .Color(THEME_COLOR));
+            break;
+        case S2H_MOD_MENU_INT_SLIDER:
+            changed = UIWidgets::CVarSliderInt(label, cvar,
+                                               UIWidgets::IntSliderOptions()
+                                                   .DefaultValue(definition.defaultInt)
+                                                   .Min(definition.minInt)
+                                                   .Max(definition.maxInt)
+                                                   .Tooltip(tooltip)
+                                                   .Color(THEME_COLOR));
+            break;
+        case S2H_MOD_MENU_FLOAT_SLIDER:
+            changed = UIWidgets::CVarSliderFloat(label, cvar,
+                                                 UIWidgets::FloatSliderOptions()
+                                                     .DefaultValue(definition.defaultFloat)
+                                                     .Min(definition.minFloat)
+                                                     .Max(definition.maxFloat)
+                                                     .Tooltip(tooltip)
+                                                     .Color(THEME_COLOR));
+            break;
+        case S2H_MOD_MENU_COMBOBOX:
+            changed = UIWidgets::CVarCombobox(label, cvar, registered.valuePointers,
+                                              UIWidgets::ComboboxOptions()
+                                                  .DefaultIndex(static_cast<uint32_t>(definition.defaultInt))
+                                                  .Tooltip(tooltip)
+                                                  .Color(THEME_COLOR));
+            break;
+        case S2H_MOD_MENU_SEPARATOR:
+            ImGui::Separator();
+            break;
+        case S2H_MOD_MENU_TEXT:
+            ImGui::TextWrapped("%s", label);
+            break;
+        case S2H_MOD_MENU_CUSTOM:
+            if (definition.onChange != nullptr) {
+                definition.onChange(); // a custom widget's callback is its draw function
+            }
+            break;
+        default:
+            break;
+    }
+    if (changed && definition.type != S2H_MOD_MENU_CUSTOM && definition.onChange != nullptr) {
+        definition.onChange();
+    }
+    ImGui::PopID();
+}
+
+void DrawFleetComboPage() {
+    ImGui::TextWrapped("Settings for the combined OoT + MM game. World Era is in the Ocarina of Time menu.");
+    ImGui::Spacing();
+    UIWidgets::CVarCheckbox("Door portals between worlds", "gFleetCombo.DoorPortals",
+                            UIWidgets::CheckboxOptions()
+                                .DefaultValue(false)
+                                .Tooltip("Also travel through the Clock Tower / Happy Mask Shop doors. The Song of "
+                                         "Soaring always works.")
+                                .Color(THEME_COLOR));
+}
+
+void DrawGatheredPage(WidgetInfo& info) {
+    if (info.name == kFleetComboPage) {
+        DrawFleetComboPage();
+        return;
+    }
+    for (const auto& page : sGatheredPages) {
+        if (page.widgetName != info.name) {
+            continue;
+        }
+        if (page.groups.empty()) {
+            ImGui::TextDisabled("No mod settings here.");
+        }
+        for (const auto& group : page.groups) {
+            ImGui::PushID(group.name.c_str());
+            if (ImGui::CollapsingHeader(group.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+                ImGui::Indent();
+                for (auto* widget : group.widgets) {
+                    DrawGatheredWidget(*widget);
+                }
+                ImGui::Unindent();
+                ImGui::Spacing();
+            }
+            ImGui::PopID();
+        }
+        return;
+    }
+}
+
+void AddPageWidget(const std::string& section, const std::string& sidebar, const std::string& name) {
+    RegisteredWidget page = {};
+    page.definition.structSize = sizeof(page.definition);
+    page.definition.type = S2H_MOD_MENU_CUSTOM;
+    page.section = section;
+    page.sidebar = sidebar;
+    page.label = name;
+    page.pageWidget = true;
+    sWidgets.push_back(std::move(page));
+    if (IsMenuBuilt()) {
+        AddWidget(sWidgets.back());
+    }
+}
+
+void EnsureSidebar(const std::string& section, const std::string& sidebar, const std::string& cvar) {
+    const bool known = std::any_of(sSidebars.begin(), sSidebars.end(), [&](const auto& registered) {
+        return registered.section == section && registered.sidebar == sidebar;
+    });
+    if (known) {
+        return;
+    }
+    sSidebars.push_back({ section, sidebar, cvar, 1 });
+    if (IsMenuBuilt()) {
+        AddSidebar(sSidebars.back());
+    }
+}
+
+GatheredPage& GetGatheredPage(const std::string& section, const std::string& sidebar) {
+    for (auto& page : sGatheredPages) {
+        if (page.section == section && page.sidebar == sidebar) {
+            return page;
+        }
+    }
+    const std::string cvar = "gFleetCombo.Menu." + section + "Page";
+    if (section == "NEI" && sGatheredPages.empty()) {
+        EnsureSidebar("NEI", "Fleet Combo", cvar);
+        AddPageWidget("NEI", "Fleet Combo", kFleetComboPage);
+    }
+    const std::string name = "##gathered." + section + "." + sidebar;
+    sGatheredPages.push_back({ section, sidebar, name, {} });
+    EnsureSidebar(section, sidebar, cvar);
+    AddPageWidget(section, sidebar, name);
+    return sGatheredPages.back();
+}
+
+void GatherWidget(const MenuHome& home, RegisteredWidget registered) {
+    GatheredPage& page = GetGatheredPage(home.section, home.sidebar);
+    auto group = std::find_if(page.groups.begin(), page.groups.end(),
+                              [&](const auto& existing) { return existing.name == home.header; });
+    if (group == page.groups.end()) {
+        page.groups.push_back({ home.header, {} });
+        group = std::prev(page.groups.end());
+        SPDLOG_WARN("[ModMenu] {} > {} > {}", home.section, home.sidebar, home.header);
+    }
+    sGatheredWidgets.push_back(std::move(registered));
+    RegisteredWidget* stored = &sGatheredWidgets.back();
+    PointAtComboValues(*stored);
+    auto position = group->widgets.end();
+    if (!stored->anchor.empty()) {
+        auto anchor = std::find_if(group->widgets.begin(), group->widgets.end(),
+                                   [&](const auto* widget) { return widget->label == stored->anchor; });
+        if (anchor != group->widgets.end()) {
+            position = stored->after ? std::next(anchor) : anchor;
+        }
+    }
+    group->widgets.insert(position, stored);
+}
 
 bool StoreWidget(const S2HModMenuWidget* widget, const char* anchor, bool after) {
     if (!IsValidWidget(widget)) {
+        SPDLOG_WARN("[ModMenu] Rejected widget '{}' ({}/{})",
+                    widget != nullptr && widget->label != nullptr ? widget->label : "?",
+                    widget != nullptr && widget->section != nullptr ? widget->section : "?",
+                    widget != nullptr && widget->sidebar != nullptr ? widget->sidebar : "?");
         return false;
     }
     RegisteredWidget registered = {};
     // A mod built against an older header passes a shorter struct; the missing tail stays zero.
     std::memcpy(&registered.definition, widget, std::min<size_t>(widget->structSize, sizeof(S2HModMenuWidget)));
     CopyComboValues(widget, registered);
-    const MenuHome home = RemapModMenu(widget->section, widget->sidebar);
-    const bool remapped = home.section != widget->section || home.sidebar != widget->sidebar;
-    registered.section = home.section;
-    registered.sidebar = home.sidebar;
-    if (remapped) {
-        registered.definition.column = 0; // gathered pages are one tidy column
-        if (!home.header.empty() && sHeadersAdded.insert(home.sidebar + "|" + home.header).second) {
-            for (const auto type : { S2H_MOD_MENU_SEPARATOR, S2H_MOD_MENU_TEXT }) {
-                RegisteredWidget header = {};
-                header.definition.structSize = sizeof(header.definition);
-                header.definition.type = type;
-                header.definition.column = 0;
-                header.section = home.section;
-                header.sidebar = home.sidebar;
-                header.label = type == S2H_MOD_MENU_TEXT ? home.header : home.header + "##separator";
-                sWidgets.push_back(std::move(header));
-                if (IsMenuBuilt()) {
-                    AddWidget(sWidgets.back());
-                }
-            }
-        }
-    }
     registered.label = widget->label;
     registered.cvar = widget->cvar == nullptr ? "" : widget->cvar;
     registered.tooltip = widget->tooltip == nullptr ? "" : widget->tooltip;
     registered.anchor = anchor == nullptr ? "" : anchor;
     registered.after = after;
+    const MenuHome home = RemapModMenu(widget->section, widget->sidebar);
+    if (home.section != widget->section || home.sidebar != widget->sidebar) {
+        GatherWidget(home, std::move(registered));
+        return true;
+    }
+    registered.section = home.section;
+    registered.sidebar = home.sidebar;
     sWidgets.push_back(std::move(registered));
     PointAtComboValues(sWidgets.back());
     if (IsMenuBuilt()) {
@@ -298,17 +476,7 @@ bool ModMenu_RegisterSidebar(const char* section, const char* sidebar, const cha
     }
     const MenuHome home = RemapModMenu(section, sidebar);
     if (home.section != section || home.sidebar != sidebar) {
-        // Gathered pages: one column, and the NEI section remembers its own selected page.
-        const bool known = std::any_of(sSidebars.begin(), sSidebars.end(), [&](const auto& registered) {
-            return registered.section == home.section && registered.sidebar == home.sidebar;
-        });
-        if (!known) {
-            sSidebars.push_back({ home.section, home.sidebar,
-                                  home.section == "NEI" ? "gFleetCombo.Menu.NEIPage" : selectionCvar, 1 });
-            if (IsMenuBuilt()) {
-                AddSidebar(sSidebars.back());
-            }
-        }
+        GetGatheredPage(home.section, home.sidebar); // gathered pages are created on demand
         return true;
     }
     sSidebars.push_back({ section, sidebar, selectionCvar, columns });

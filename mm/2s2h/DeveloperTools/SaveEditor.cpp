@@ -1,4 +1,5 @@
 #include "2s2h/ModApi/Labels/ModLabels.h"
+#include "2s2h/Fleet/FleetGame.h"
 #include "SaveEditor.h"
 #include "2s2h/BenPort.h"
 #include "2s2h/ModApi/CustomItemRegistry/KaleidoItemManager.h"
@@ -2761,7 +2762,10 @@ void SaveEditorWindow::DrawElement() {
             }
         }
 
-        GameInteractor::Instance->ExecuteHooks<GameInteractor::OnSaveEditorTabs>(&gSaveContext);
+        // Fleet Combo: the Fleet Combo tab covers every mod's items; skip the per-mod tabs.
+        if (!FleetGame_IsHosted()) {
+            GameInteractor::Instance->ExecuteHooks<GameInteractor::OnSaveEditorTabs>(&gSaveContext);
+        }
         ImGui::EndTabBar();
     }
     UIWidgets::PopStyleTabs();

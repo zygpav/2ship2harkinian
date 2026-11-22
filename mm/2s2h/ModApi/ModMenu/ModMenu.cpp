@@ -486,6 +486,19 @@ bool ModMenu_RegisterSidebar(const char* section, const char* sidebar, const cha
     return true;
 }
 
+void ModMenu_Describe(std::vector<std::string>& lines) {
+    for (const auto& page : sGatheredPages) {
+        lines.push_back("gathered " + page.section + " > " + page.sidebar);
+        for (const auto& group : page.groups) {
+            lines.push_back("  section " + group.name + " (" + std::to_string(group.widgets.size()) + ")");
+            for (const auto* widget : group.widgets) {
+                lines.push_back("    " + std::to_string(static_cast<int>(widget->definition.type)) + " " + widget->label +
+                                (widget->cvar.empty() ? "" : " {" + widget->cvar + "}"));
+            }
+        }
+    }
+}
+
 bool ModMenu_RegisterWidgetAt(const S2HModMenuWidget* widget, const char* anchor, bool after) {
     if (anchor == nullptr || anchor[0] == '\0') {
         return false;

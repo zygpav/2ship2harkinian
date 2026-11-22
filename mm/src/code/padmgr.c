@@ -32,6 +32,7 @@
  */
 
 #include "global.h"
+#include "2s2h/Fleet/FleetTest.h"
 #include "PR/controller.h"
 #include "PR/os_motor.h"
 
@@ -615,6 +616,7 @@ void PadMgr_HandleRetrace(void) {
     // Wait for controller data
     // osRecvMesg(serialEventQueue, NULL, OS_MESG_BLOCK);
     osContGetReadData(sPadMgrInstance->pads);
+    FleetTest_InjectPad(&sPadMgrInstance->pads[0]); // Fleet Combo test mode; no-op otherwise
 
     // Clear all but controller 1
     memset(&sPadMgrInstance->pads[1], 0, sizeof(*sPadMgrInstance->pads) * (MAXCONTROLLERS - 1));

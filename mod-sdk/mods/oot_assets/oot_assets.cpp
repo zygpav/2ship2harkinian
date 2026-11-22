@@ -121,5 +121,9 @@ extern "C" S2H_MOD_EXPORT void ModInit() {
     button.onChange = DrawLoaderMenu;
     sApi->RegisterMenuSidebar("Enhancements", "OoT Asset Loader", "gMods.OotAssets.Menu", 1);
     sApi->RegisterMenuWidget(&button);
-    if (!HasExtractedAssets()) ExtractAssets();
+    // Ask only when there is no archive at all: a mod loading before the archive is mounted (Fleet Combo prepares
+    // Termina's randomizer before Termina boots) would otherwise ask again on every start. The menu button re-extracts.
+    if (!HasExtractedAssets() && !(S2H_MOD_API_HAS(sApi, HasModArchiveFile) && sApi->HasModArchiveFile("oot.o2r"))) {
+        ExtractAssets();
+    }
 }

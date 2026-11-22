@@ -2480,6 +2480,8 @@ static ImTextureID ModEditorIcon(const S2HCustomItemDefinition* item) {
 
 static void SetModEditorOwned(const S2HCustomItemDefinition* item, bool owned) {
     if (CustomEquipRegistry_Find(item->key) != nullptr) CustomEquipRegistry_SetOwned(item->key, owned);
+    // Received once per copy, as from chests: pieces (Ultrahand) and stages count what they received.
+    else if (owned && !CustomItemRegistry_IsOwned(item->key)) CustomItemRegistry_ReceiveCopies(item->key);
     else CustomItemRegistry_SetOwned(item->key, owned);
 }
 

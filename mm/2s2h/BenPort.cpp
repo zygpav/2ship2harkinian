@@ -1050,7 +1050,10 @@ extern "C" void InitOTR(int argc, char* argv[]) {
     conf->RunVersionUpdates();
     Ship::Context::GetRawInstance()->GetConsoleVariables()->Save();
 
-    GameInteractor::Instance = new GameInteractor();
+    // Fleet Combo: a randomizer prepared before the boot already made the interactor, and the mods' hooks live in it.
+    if (GameInteractor::Instance == nullptr) {
+        GameInteractor::Instance = new GameInteractor();
+    }
     AudioCollection::Instance = new AudioCollection();
     SDLNet_Init();
     Anchor::Instance = new Anchor();
@@ -2483,7 +2486,7 @@ extern "C" void ModApi_InitializeRuntime(void) {
     static bool initialized = false;
     if (initialized) return;
     initialized = true;
-    ModApi_Init();
+    ModApi_Init(); // after a headless randomizer run only the parts that need the window
     SceneDB_Init();
     DungeonRegistry_Load();
     S2H::Unbound::LoadCustomActors();

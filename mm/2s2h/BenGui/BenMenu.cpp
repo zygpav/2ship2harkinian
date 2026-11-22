@@ -2277,6 +2277,10 @@ void BenMenu::InitElement() {
     for (auto& initFunc : MenuInit::GetInitFuncs()) {
         initFunc();
     }
+    // Fleet Combo: online play does not apply to the combined game.
+    if (FleetGame_IsHosted()) {
+        RemoveMenuEntry("Network");
+    }
     mMenuElementsInitialized = true;
 
     disabledMap = {

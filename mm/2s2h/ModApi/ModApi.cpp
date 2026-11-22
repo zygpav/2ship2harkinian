@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -487,6 +488,22 @@ S2HModApi BuildTable() {
 
 // Runs once, after ShipInit::InitAll: InitAll re-runs on every preset apply and would load the mods twice.
 void ModApi_Init() {
+    // Fleet Combo prepares Termina's randomizer without a window before Termina boots: the mods are loaded then,
+    // and booting must not load them a second time (their items would be refused as duplicates and their hooks
+    // never registered). The window-only parts follow at the boot.
+    static bool sLoaded = false;
+    if (sLoaded) {
+        if (Ship::Context::GetRawInstance()->GetWindow() != nullptr) {
+            static bool sWindowParts = false;
+            if (!sWindowParts) {
+                sWindowParts = true;
+                Microphone_Init();
+                ModStore_Init();
+            }
+        }
+        return;
+    }
+    sLoaded = true;
     ProgressiveItems_Init();
     ModStorage_Init();
     CustomItemRegistry_Init();
@@ -536,6 +553,24 @@ const S2HModApi* ModApi_Get() {
 
 std::string ModApi_GetCurrentMod() {
     return sCurrentMod;
+}
+
+namespace {
+std::map<std::string, std::string>& ModDisplayNames() {
+    static std::map<std::string, std::string> names;
+    return names;
+}
+} // namespace
+
+void ModApi_SetModDisplayName(const std::string& name, const std::string& displayName) {
+    if (!name.empty() && !displayName.empty()) {
+        ModDisplayNames()[name] = displayName;
+    }
+}
+
+std::string ModApi_GetModDisplayName(const std::string& name) {
+    auto found = ModDisplayNames().find(name);
+    return found != ModDisplayNames().end() ? found->second : name;
 }
 
 void ModApi_SetCurrentMod(const std::string& name) {

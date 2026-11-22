@@ -171,6 +171,13 @@ extern "C" void FleetGame_JoinHostContext(void) {
 std::shared_ptr<Ship::ResourceManager> FleetGame_CreateResources(const std::string& archivePath) {
     std::shared_ptr<Ship::GameServices> game = Ship::GameRegistry::Get(GameName);
     assert(game != nullptr);
+    // Fleet may have prepared Termina's randomizer before Termina boots (a new combined file). That run already
+    // mounted the game and every mod archive, and the mods are loaded against it: keep it, or the booted game has
+    // none of the mods' assets.
+    if (game->Resources != nullptr) {
+        game->Resources->GetArchiveManager()->AddArchive(archivePath);
+        return game->Resources;
+    }
     // Assigned before Init so the manager's own workers already run as this game.
     game->Resources = std::make_shared<Ship::ResourceManager>();
     game->Resources->Init({ archivePath }, {}, ResourceThreadReserve);

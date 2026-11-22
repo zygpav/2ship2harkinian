@@ -128,8 +128,9 @@ static void ReleasePlayer(Player* player, PlayState* play) {
     ResetGate();
 }
 
+// Without a magic meter yet the gate is free: in Fleet Combo changing age is how the other era is reached.
 static bool HasMagicForGate(void) {
-    return gSaveContext.save.saveInfo.playerData.isMagicAcquired &&
+    return !gSaveContext.save.saveInfo.playerData.isMagicAcquired ||
            gSaveContext.save.saveInfo.playerData.magic >= TIME_GATE_MAGIC_COST;
 }
 
@@ -204,7 +205,9 @@ static void HoldLastHoverFrames(Player* player) {
 }
 
 static void TravelThroughTime(Player* player, PlayState* play) {
-    Magic_Consume(play, TIME_GATE_MAGIC_COST, MAGIC_CONSUME_NOW);
+    if (gSaveContext.save.saveInfo.playerData.isMagicAcquired) {
+        Magic_Consume(play, TIME_GATE_MAGIC_COST, MAGIC_CONSUME_NOW);
+    }
     Rumble_Request(400.0f, 200, 30, 100);
     Audio_PlaySfx_AtPos(&player->actor.world.pos, NA_SE_SY_WHITE_OUT_T);
     SwitchAge();

@@ -16,6 +16,7 @@
 #include <spdlog/spdlog.h>
 
 #include "2s2h/Fleet/FleetMenu.h"
+#include "2s2h/Fleet/FleetGame.h"
 #include "2s2h/BenGui/BenMenu.h"
 #include "2s2h/BenGui/BenGui.hpp"
 
@@ -337,7 +338,8 @@ void DrawGatheredWidget(RegisteredWidget& registered) {
 }
 
 void DrawFleetComboPage() {
-    ImGui::TextWrapped("Termina's side of the combined game.");
+    ImGui::TextColored(FleetMenu_IsActive() ? ImVec4(0.5f, 1, 0.5f, 1) : ImVec4(0.7f, 0.7f, 0.7f, 1), "%s",
+                       FleetMenu_IsActive() ? "Link is in Termina now" : "Waiting while Link is in Hyrule");
     ImGui::Spacing();
     UIWidgets::CVarCheckbox("Door portals between worlds", "gFleetCombo.DoorPortals",
                             UIWidgets::CheckboxOptions()
@@ -416,18 +418,85 @@ void EnsureSidebar(const std::string& section, const std::string& sidebar, const
 void AddSplitPage(const std::string& section, const std::string& sidebar, const std::string& panel, FleetSplit split,
                   std::function<void()> draw) {
     const std::string name = "##split." + section + "." + sidebar;
-    FleetMenu_RegisterPanel(panel, std::move(draw));
+    if (draw) {
+        FleetMenu_RegisterPanel(panel, std::move(draw));
+    }
     sSplitPages[name] = { panel, split };
-    EnsureSidebar(section, sidebar, "gFleetCombo.Menu." + section + "Page");
+    EnsureSidebar(section, sidebar, "gFleetCombo.Menu.Page");
     AddPageWidget(section, sidebar, name);
+}
+
+// Every mod's settings on one page, one closed header per mod, with a search box.
+void DrawModSettingsPanel() {
+    static ImGuiTextFilter filter;
+    filter.Draw("Search##modsettings", 220);
+    std::vector<std::string> order;
+    std::map<std::string, std::vector<RegisteredWidget*>> mods;
+    for (const auto& page : sGatheredPages) {
+        if (page.section != "NEI") {
+            continue;
+        }
+        for (const auto& group : page.groups) {
+            if (!mods.contains(group.name)) {
+                order.push_back(group.name);
+            }
+            auto& widgets = mods[group.name];
+            widgets.insert(widgets.end(), group.widgets.begin(), group.widgets.end());
+        }
+    }
+    if (order.empty()) {
+        ImGui::TextDisabled("No mod has settings.");
+        return;
+    }
+    for (const auto& name : order) {
+        const auto& widgets = mods[name];
+        const bool nameMatches = filter.PassFilter(name.c_str());
+        const bool anyMatches = nameMatches || std::any_of(widgets.begin(), widgets.end(), [](const auto* widget) {
+                                    return filter.PassFilter(widget->label.c_str());
+                                });
+        if (!anyMatches) {
+            continue;
+        }
+        ImGui::PushID(name.c_str());
+        if (filter.IsActive()) {
+            ImGui::SetNextItemOpen(true);
+        }
+        if (ImGui::CollapsingHeader(name.c_str())) {
+            ImGui::Indent();
+            for (auto* widget : widgets) {
+                if (nameMatches || filter.PassFilter(widget->label.c_str()) ||
+                    widget->definition.type == S2H_MOD_MENU_CUSTOM) {
+                    DrawGatheredWidget(*widget);
+                }
+            }
+            ImGui::Unindent();
+            ImGui::Spacing();
+        }
+        ImGui::PopID();
+    }
+}
+
+// Fleet Combo: one menu section for the combined game, every page showing Hyrule and Termina side by side.
+constexpr const char* FleetSection = "Fleet Combo";
+
+void EnsureFleetSection() {
+    static bool sCreated = false;
+    if (sCreated || !FleetGame_IsHosted()) {
+        return;
+    }
+    sCreated = true;
+    AddSplitPage(FleetSection, "Home", "fleet:home", FleetSplit::Columns, DrawFleetComboPage);
+    AddSplitPage(FleetSection, "NEI Items", "fleet:items", FleetSplit::Columns, nullptr);
+    AddSplitPage(FleetSection, "Inventory", "fleet:inventory", FleetSplit::Stacked, nullptr);
+    AddSplitPage(FleetSection, "Mod Settings", "fleet:mods", FleetSplit::Columns, DrawModSettingsPanel);
 }
 
 GatheredPage& AddGatheredPage(const std::string& section, const std::string& sidebar) {
     const std::string name = "##gathered." + section + "." + sidebar;
     sGatheredPages.push_back({ section, sidebar, name, {} });
     GatheredPage* page = &sGatheredPages.back(); // deque elements never move
-    if (section == "NEI") {
-        AddSplitPage(section, sidebar, "nei:" + sidebar, FleetSplit::Columns, [page]() { DrawGatheredGroups(*page); });
+    if (section == "NEI" && FleetGame_IsHosted()) {
+        EnsureFleetSection(); // drawn by the Mod Settings page
     } else {
         EnsureSidebar(section, sidebar, "gFleetCombo.Menu." + section + "Page");
         AddPageWidget(section, sidebar, name);
@@ -441,12 +510,10 @@ GatheredPage& GetGatheredPage(const std::string& section, const std::string& sid
             return page;
         }
     }
-    const std::string cvar = "gFleetCombo.Menu." + section + "Page";
-    if (section == "NEI" && std::none_of(sGatheredPages.begin(), sGatheredPages.end(),
-                                         [](const auto& existing) { return existing.section == "NEI"; })) {
-        // The section's pages in a fixed order, whichever mod loads first; "Other" comes last, when needed.
-        AddSplitPage("NEI", "Fleet Combo", "nei:Fleet Combo", FleetSplit::Columns, DrawFleetComboPage);
-        for (const char* category : { "Items & Masks", "Equipment", "Gameplay", "Companions", "Visuals", "Other" }) {
+    if (section == "NEI" && !FleetGame_IsHosted() &&
+        std::none_of(sGatheredPages.begin(), sGatheredPages.end(),
+                     [](const auto& existing) { return existing.section == "NEI"; })) {
+        for (const char* category : { "Items & Masks", "Equipment", "Gameplay", "Companions", "Visuals" }) {
             if (category != sidebar) {
                 AddGatheredPage("NEI", category);
             }
@@ -536,9 +603,9 @@ bool ModMenu_RegisterSidebar(const char* section, const char* sidebar, const cha
     return true;
 }
 
-void ModMenu_AddFleetPage(const char* section, const char* sidebar, const char* panel, bool stacked,
-                          std::function<void()> draw) {
-    AddSplitPage(section, sidebar, panel, stacked ? FleetSplit::Stacked : FleetSplit::Columns, std::move(draw));
+void ModMenu_SetFleetPanel(const char* panel, std::function<void()> draw) {
+    EnsureFleetSection();
+    FleetMenu_RegisterPanel(panel, std::move(draw));
 }
 
 void ModMenu_Describe(std::vector<std::string>& lines) {

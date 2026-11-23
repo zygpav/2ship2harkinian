@@ -2731,6 +2731,89 @@ static void DrawModLayoutEditor() {
 
 }
 
+// Fleet Combo menu, NEI Items page: every mod item as an icon. Lit icons are owned; click one to give or take it.
+static const char* ModItemName(const S2HCustomItemDefinition* item) {
+    return item->displayName != nullptr && item->displayName[0] != '\0' ? item->displayName : item->key;
+}
+
+static void DrawNeiItemsPanel() {
+    if (gPlayState == nullptr) {
+        ImGui::TextDisabled("Load a file to give Termina's NEI items.");
+        return;
+    }
+    std::vector<const S2HCustomItemDefinition*> items;
+    int owned = 0;
+    for (uint32_t i = 0; i < CustomItemRegistry_GetCount(); ++i) {
+        const auto* item = CustomItemRegistry_GetAt(i);
+        if (item == nullptr ||
+            (!CustomItemRegistry_IsEditorVisible(item->key) && CustomEquipRegistry_Find(item->key) == nullptr)) {
+            continue;
+        }
+        items.push_back(item);
+        owned += CustomItemRegistry_IsOwned(item->key) ? 1 : 0;
+    }
+    if (items.empty()) {
+        ImGui::TextDisabled("No NEI items are loaded.");
+        return;
+    }
+    std::stable_sort(items.begin(), items.end(), [](const auto* a, const auto* b) {
+        return std::string(ModItemName(a)) < std::string(ModItemName(b));
+    });
+    ImGui::Text("%d of %d owned", owned, static_cast<int>(items.size()));
+    ImGui::SameLine();
+    if (ImGui::Button("Give all")) {
+        for (const auto* item : items) {
+            SetModEditorOwned(item, true);
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Remove all")) {
+        for (const auto* item : items) {
+            SetModEditorOwned(item, false);
+        }
+    }
+    static ImGuiTextFilter filter;
+    filter.Draw("Search##neiitems", 200);
+    ImGui::TextDisabled("Click an icon to give or remove it.");
+    const float cell = 44.0f;
+    const float spacing = ImGui::GetStyle().ItemSpacing.x;
+    const int perRow = std::max(1, static_cast<int>((ImGui::GetContentRegionAvail().x + spacing) / (cell + spacing)));
+    int column = 0;
+    for (const auto* item : items) {
+        const char* name = ModItemName(item);
+        if (!filter.PassFilter(name) && !filter.PassFilter(item->key)) {
+            continue;
+        }
+        if (column > 0) {
+            ImGui::SameLine();
+        }
+        const bool have = CustomItemRegistry_IsOwned(item->key);
+        ImGui::PushID(item->key);
+        ImTextureID texture = ModEditorIcon(item);
+        const ImVec4 tint = have ? ImVec4(1, 1, 1, 1) : ImVec4(0.35f, 0.35f, 0.35f, 0.6f);
+        const ImVec4 background = have ? ImVec4(0.2f, 0.45f, 0.2f, 0.6f) : ImVec4(0, 0, 0, 0.3f);
+        bool clicked;
+        if (texture) {
+            clicked = ImGui::ImageButton("##item", texture, ImVec2(cell - 8, cell - 8), ImVec2(0, 0), ImVec2(1, 1),
+                                         background, tint);
+        } else {
+            clicked = ImGui::Button(std::string(name).substr(0, 3).c_str(), ImVec2(cell, cell));
+        }
+        if (clicked) {
+            SetModEditorOwned(item, !have);
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::BeginTooltip();
+            ImGui::TextUnformatted(name);
+            ImGui::TextDisabled("%s", item->key);
+            ImGui::TextUnformatted(have ? "Owned (click to remove)" : "Not owned (click to give)");
+            ImGui::EndTooltip();
+        }
+        ImGui::PopID();
+        column = (column + 1) % perRow;
+    }
+}
+
 static void DrawModInventoryEditor() {
     DrawModItemsList();
     ImGui::Separator();
@@ -2833,9 +2916,8 @@ void SaveEditorWindow::InitElement() {
     static bool sMenuPages = false;
     if (FleetGame_IsHosted() && !sMenuPages) {
         sMenuPages = true;
-        ModMenu_AddFleetPage("Inventory", "Items", "inv:items", true, []() { DrawEditorPanel(DrawInventoryItemsPanel); });
-        ModMenu_AddFleetPage("Inventory", "NEI Items", "inv:nei", true, []() { DrawEditorPanel(DrawModItemsList); });
-        ModMenu_AddFleetPage("Inventory", "Layout", "inv:layout", true, []() { DrawEditorPanel(DrawModLayoutEditor); });
+        ModMenu_SetFleetPanel("fleet:items", []() { DrawEditorPanel(DrawNeiItemsPanel); });
+        ModMenu_SetFleetPanel("fleet:inventory", []() { DrawEditorPanel(DrawInventoryItemsPanel); });
     }
     initSafeItemsForInventorySlot();
     randoItemIdComboboxMap.clear();

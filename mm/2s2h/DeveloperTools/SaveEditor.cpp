@@ -1,5 +1,7 @@
 #include "2s2h/ModApi/Labels/ModLabels.h"
 #include "2s2h/Fleet/FleetGame.h"
+#include "2s2h/Fleet/FleetMenu.h"
+#include "2s2h/ModApi/ModMenu/ModMenu.h"
 #include "SaveEditor.h"
 #include "2s2h/BenPort.h"
 #include "2s2h/ModApi/CustomItemRegistry/KaleidoItemManager.h"
@@ -2478,17 +2480,28 @@ static ImTextureID ModEditorIcon(const S2HCustomItemDefinition* item) {
     return ModEditorPathIcon(path);
 }
 
+static void ApplyModEditorOwned(const S2HCustomItemDefinition* item, bool owned);
+
+// Drawn from Ocarina of Time's menu, Termina is paused: the change is made when Link is back in Termina.
 static void SetModEditorOwned(const S2HCustomItemDefinition* item, bool owned) {
+    FleetMenu_Defer([item, owned]() { ApplyModEditorOwned(item, owned); });
+}
+
+static void ApplyModEditorOwned(const S2HCustomItemDefinition* item, bool owned) {
     if (CustomEquipRegistry_Find(item->key) != nullptr) CustomEquipRegistry_SetOwned(item->key, owned);
     // Received once per copy, as from chests: pieces (Ultrahand) and stages count what they received.
     else if (owned && !CustomItemRegistry_IsOwned(item->key)) CustomItemRegistry_ReceiveCopies(item->key);
     else CustomItemRegistry_SetOwned(item->key, owned);
 }
 
-static void DrawModInventoryEditor() {
+static std::string sModSelected;
+static int sModScreen = 0, sModPageNumber = 0;
+
+static void DrawModItemsList() {
     static ImGuiTextFilter filter;
-    static std::string selected;
-    static int screen = 0, pageNumber = 0;
+    auto& selected = sModSelected;
+    int& screen = sModScreen;
+    int& pageNumber = sModPageNumber;
     filter.Draw("Find mod item");
     ImGui::TextWrapped("Give/Remove changes the current save. Select an item, then click a grid cell or drag its name "
                        "to move it. Layout changes are saved in configuration. Shared cells form a wheel.");
@@ -2547,7 +2560,16 @@ static void DrawModInventoryEditor() {
         }
     }
     ImGui::EndChild();
-    ImGui::Separator();
+}
+
+static void DrawModLayoutEditor() {
+    auto& selected = sModSelected;
+    int& screen = sModScreen;
+    int& pageNumber = sModPageNumber;
+    if (CustomItemRegistry_GetCount() == 0) {
+        ImGui::TextDisabled("No mod items to arrange.");
+        return;
+    }
     ImGui::TextUnformatted("Pause menu disposition");
     if (ImGui::Combo("Screen", &screen, "Items\0Collectables\0Masks\0")) pageNumber = 0;
     const int limit = screen == 1 ? 30 : screen == 0 ? 224 : 65279;
@@ -2709,7 +2731,41 @@ static void DrawModInventoryEditor() {
 
 }
 
+static void DrawModInventoryEditor() {
+    DrawModItemsList();
+    ImGui::Separator();
+    DrawModLayoutEditor();
+}
+
+// Fleet Combo: the menu's Inventory section, this game's half of each page (the other half is Ocarina of Time's).
+static void DrawEditorPanel(void (*body)()) {
+    UIWidgets::PushStyleTabs(UIWidgets::Colors(CVarGetInteger("gSettings.Menu.Theme", 5)));
+    body();
+    UIWidgets::PopStyleTabs();
+}
+
+static void DrawInventoryItemsPanel() {
+    if (gPlayState == nullptr) {
+        ImGui::TextDisabled("Load a file to edit Termina's inventory.");
+        return;
+    }
+    if (ImGui::BeginTabBar("FleetInventoryTabs", ImGuiTabBarFlags_NoCloseWithMiddleMouseButton)) {
+        if (ImGui::BeginTabItem("Items & Masks")) {
+            DrawItemsAndMasksTab();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Quest Status")) {
+            DrawQuestStatusTab();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+}
+
 void SaveEditorWindow::DrawElement() {
+    // Fleet Combo: items, masks and quest status are edited from the menu's Inventory section, for both games at
+    // once; the Save Editor keeps the rest.
+    const bool hosted = FleetGame_IsHosted();
     UIWidgets::PushStyleTabs(UIWidgets::Colors(CVarGetInteger("gSettings.Menu.Theme", 5)));
     if (ImGui::BeginTabBar("SaveContextTabBar", ImGuiTabBarFlags_NoCloseWithMiddleMouseButton)) {
         if (ImGui::BeginTabItem("General")) {
@@ -2717,17 +2773,17 @@ void SaveEditorWindow::DrawElement() {
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Items & Masks")) {
+        if (!hosted && ImGui::BeginTabItem("Items & Masks")) {
             DrawItemsAndMasksTab();
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Mod Items & Equipment")) {
+        if (!hosted && ImGui::BeginTabItem("Mod Items & Equipment")) {
             DrawModInventoryEditor();
             ImGui::EndTabItem();
         }
 
-        if (ImGui::BeginTabItem("Quest Status")) {
+        if (!hosted && ImGui::BeginTabItem("Quest Status")) {
             DrawQuestStatusTab();
             ImGui::EndTabItem();
         }
@@ -2764,8 +2820,8 @@ void SaveEditorWindow::DrawElement() {
             }
         }
 
-        // Fleet Combo: the Fleet Combo tab covers every mod's items; skip the per-mod tabs.
-        if (!FleetGame_IsHosted()) {
+        // Fleet Combo: the Inventory section covers every mod's items; skip the per-mod tabs.
+        if (!hosted) {
             GameInteractor::Instance->ExecuteHooks<GameInteractor::OnSaveEditorTabs>(&gSaveContext);
         }
         ImGui::EndTabBar();
@@ -2774,6 +2830,13 @@ void SaveEditorWindow::DrawElement() {
 }
 
 void SaveEditorWindow::InitElement() {
+    static bool sMenuPages = false;
+    if (FleetGame_IsHosted() && !sMenuPages) {
+        sMenuPages = true;
+        ModMenu_AddFleetPage("Inventory", "Items", "inv:items", true, []() { DrawEditorPanel(DrawInventoryItemsPanel); });
+        ModMenu_AddFleetPage("Inventory", "NEI Items", "inv:nei", true, []() { DrawEditorPanel(DrawModItemsList); });
+        ModMenu_AddFleetPage("Inventory", "Layout", "inv:layout", true, []() { DrawEditorPanel(DrawModLayoutEditor); });
+    }
     initSafeItemsForInventorySlot();
     randoItemIdComboboxMap.clear();
     for (auto& [_, randoItem] : Rando::StaticData::Items) {

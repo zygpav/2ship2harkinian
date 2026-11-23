@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <iterator>
 #include <map>
 #include <set>
@@ -14,6 +15,7 @@
 #include <imgui.h>
 #include <spdlog/spdlog.h>
 
+#include "2s2h/Fleet/FleetMenu.h"
 #include "2s2h/BenGui/BenMenu.h"
 #include "2s2h/BenGui/BenGui.hpp"
 
@@ -267,7 +269,6 @@ struct GatheredPage {
 
 std::deque<GatheredPage> sGatheredPages;
 std::deque<RegisteredWidget> sGatheredWidgets;
-const char* const kFleetComboPage = "##gathered.NEI.Fleet Combo";
 
 void DrawGatheredWidget(RegisteredWidget& registered) {
     const auto& definition = registered.definition;
@@ -316,21 +317,27 @@ void DrawGatheredWidget(RegisteredWidget& registered) {
             ImGui::TextWrapped("%s", label);
             break;
         case S2H_MOD_MENU_CUSTOM:
-            if (definition.onChange != nullptr) {
-                definition.onChange(); // a custom widget's callback is its draw function
+            if (definition.onChange == nullptr) {
+                break;
+            }
+            // A custom widget's callback is its draw function, which may run game code: only in the running game.
+            if (FleetMenu_IsActive()) {
+                definition.onChange();
+            } else {
+                FleetMenu_InactiveNote(label[0] == '#' ? "This control" : label);
             }
             break;
         default:
             break;
     }
     if (changed && definition.type != S2H_MOD_MENU_CUSTOM && definition.onChange != nullptr) {
-        definition.onChange();
+        FleetMenu_Defer(definition.onChange);
     }
     ImGui::PopID();
 }
 
 void DrawFleetComboPage() {
-    ImGui::TextWrapped("Settings for the combined OoT + MM game. World Era is in the Ocarina of Time menu.");
+    ImGui::TextWrapped("Termina's side of the combined game.");
     ImGui::Spacing();
     UIWidgets::CVarCheckbox("Door portals between worlds", "gFleetCombo.DoorPortals",
                             UIWidgets::CheckboxOptions()
@@ -340,31 +347,42 @@ void DrawFleetComboPage() {
                                 .Color(THEME_COLOR));
 }
 
+void DrawGatheredGroups(const GatheredPage& page) {
+    if (page.groups.empty()) {
+        ImGui::TextDisabled("No mod settings here.");
+    }
+    for (const auto& group : page.groups) {
+        ImGui::PushID(group.name.c_str());
+        if (ImGui::CollapsingHeader(group.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Indent();
+            for (auto* widget : group.widgets) {
+                DrawGatheredWidget(*widget);
+            }
+            ImGui::Unindent();
+            ImGui::Spacing();
+        }
+        ImGui::PopID();
+    }
+}
+
+// Fleet Combo: pages drawn as both games' halves (FleetMenu.h), by widget name.
+struct SplitPage {
+    std::string panel;
+    FleetSplit split;
+};
+std::map<std::string, SplitPage> sSplitPages;
+
 void DrawGatheredPage(WidgetInfo& info) {
-    if (info.name == kFleetComboPage) {
-        DrawFleetComboPage();
+    auto split = sSplitPages.find(info.name);
+    if (split != sSplitPages.end()) {
+        FleetMenu_DrawSplit(split->second.panel.c_str(), split->second.split);
         return;
     }
     for (const auto& page : sGatheredPages) {
-        if (page.widgetName != info.name) {
-            continue;
+        if (page.widgetName == info.name) {
+            DrawGatheredGroups(page);
+            return;
         }
-        if (page.groups.empty()) {
-            ImGui::TextDisabled("No mod settings here.");
-        }
-        for (const auto& group : page.groups) {
-            ImGui::PushID(group.name.c_str());
-            if (ImGui::CollapsingHeader(group.name.c_str(), ImGuiTreeNodeFlags_DefaultOpen)) {
-                ImGui::Indent();
-                for (auto* widget : group.widgets) {
-                    DrawGatheredWidget(*widget);
-                }
-                ImGui::Unindent();
-                ImGui::Spacing();
-            }
-            ImGui::PopID();
-        }
-        return;
     }
 }
 
@@ -395,12 +413,26 @@ void EnsureSidebar(const std::string& section, const std::string& sidebar, const
     }
 }
 
+void AddSplitPage(const std::string& section, const std::string& sidebar, const std::string& panel, FleetSplit split,
+                  std::function<void()> draw) {
+    const std::string name = "##split." + section + "." + sidebar;
+    FleetMenu_RegisterPanel(panel, std::move(draw));
+    sSplitPages[name] = { panel, split };
+    EnsureSidebar(section, sidebar, "gFleetCombo.Menu." + section + "Page");
+    AddPageWidget(section, sidebar, name);
+}
+
 GatheredPage& AddGatheredPage(const std::string& section, const std::string& sidebar) {
     const std::string name = "##gathered." + section + "." + sidebar;
     sGatheredPages.push_back({ section, sidebar, name, {} });
-    EnsureSidebar(section, sidebar, "gFleetCombo.Menu." + section + "Page");
-    AddPageWidget(section, sidebar, name);
-    return sGatheredPages.back();
+    GatheredPage* page = &sGatheredPages.back(); // deque elements never move
+    if (section == "NEI") {
+        AddSplitPage(section, sidebar, "nei:" + sidebar, FleetSplit::Columns, [page]() { DrawGatheredGroups(*page); });
+    } else {
+        EnsureSidebar(section, sidebar, "gFleetCombo.Menu." + section + "Page");
+        AddPageWidget(section, sidebar, name);
+    }
+    return *page;
 }
 
 GatheredPage& GetGatheredPage(const std::string& section, const std::string& sidebar) {
@@ -413,9 +445,8 @@ GatheredPage& GetGatheredPage(const std::string& section, const std::string& sid
     if (section == "NEI" && std::none_of(sGatheredPages.begin(), sGatheredPages.end(),
                                          [](const auto& existing) { return existing.section == "NEI"; })) {
         // The section's pages in a fixed order, whichever mod loads first; "Other" comes last, when needed.
-        EnsureSidebar("NEI", "Fleet Combo", cvar);
-        AddPageWidget("NEI", "Fleet Combo", kFleetComboPage);
-        for (const char* category : { "Items & Masks", "Equipment", "Gameplay", "Companions", "Visuals" }) {
+        AddSplitPage("NEI", "Fleet Combo", "nei:Fleet Combo", FleetSplit::Columns, DrawFleetComboPage);
+        for (const char* category : { "Items & Masks", "Equipment", "Gameplay", "Companions", "Visuals", "Other" }) {
             if (category != sidebar) {
                 AddGatheredPage("NEI", category);
             }
@@ -503,6 +534,11 @@ bool ModMenu_RegisterSidebar(const char* section, const char* sidebar, const cha
         AddSidebar(sSidebars.back());
     }
     return true;
+}
+
+void ModMenu_AddFleetPage(const char* section, const char* sidebar, const char* panel, bool stacked,
+                          std::function<void()> draw) {
+    AddSplitPage(section, sidebar, panel, stacked ? FleetSplit::Stacked : FleetSplit::Columns, std::move(draw));
 }
 
 void ModMenu_Describe(std::vector<std::string>& lines) {

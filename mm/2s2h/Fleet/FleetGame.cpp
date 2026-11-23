@@ -1,3 +1,4 @@
+#include "2s2h/Fleet/FleetMenu.h"
 #include "FleetGame.h"
 #include "FleetTest.h"
 #include "FleetPortal.h"
@@ -82,6 +83,7 @@ void Detach() {
 const std::unordered_map<std::string_view, void*>& Functions() {
     static const std::unordered_map<std::string_view, void*> functions = {
         { "Name", reinterpret_cast<void*>(Name) },
+        { "DrawPanel", reinterpret_cast<void*>(FleetMenu_DrawPanel) },
         { "DrawItem", reinterpret_cast<void*>(FleetItemDraw_Draw) },
         { "ItemIcon", reinterpret_cast<void*>(FleetItemDraw_Icon) },
         { "Reset", reinterpret_cast<void*>(S2H_ResetToTitle) },
@@ -190,6 +192,7 @@ extern "C" void FleetGame_LeaveHostContext(void) {
 
 extern "C" void FleetGame_FrameEnd(void) {
     FleetTest_Tick();
+    FleetMenu_RunDeferred();
     FleetRuntime_FrameEnd();
     FleetPortal_FrameEnd();
     if (sFrameEnd != nullptr) {

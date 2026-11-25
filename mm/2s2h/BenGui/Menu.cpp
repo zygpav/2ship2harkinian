@@ -610,6 +610,11 @@ void Menu::DrawElement() {
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.0f, 8.0f));
     const char* headerCvar = "gSettings.Menu.ActiveHeader";
     std::string headerIndex = CVarGetString(headerCvar, "Settings");
+    // A header saved by an older build (or a mod no longer loaded) may be gone: fall back to the first one.
+    if (!menuEntries.contains(headerIndex) || menuEntries.at(headerIndex).sidebarOrder.empty()) {
+        headerIndex = menuOrder.empty() ? std::string("Settings") : menuOrder.front();
+        CVarSetString(headerCvar, headerIndex.c_str());
+    }
     if (GetVectorIndexOf(menuOrder, headerIndex) == menuOrder.size()) {
         headerIndex = menuOrder.at(0);
     }

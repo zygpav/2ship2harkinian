@@ -105,9 +105,19 @@ void BootIntoPlay(const Arrival& arrival) {
     gSaveContext.flashSaveAvailable = true;
     gSaveContext.fileNum = arrival.slot;
     bool fresh = false;
+    auto belongsToSeed = []() {
+        return !FleetRuntime_HasSession() ||
+               (IS_RANDO && gSaveContext.save.shipSaveInfo.rando.finalSeed ==
+                                FleetRuntime_Seed().at("masterSeed").get<uint32_t>());
+    };
+    bool opened = false;
     if (SaveManager_SlotExists(arrival.slot)) {
         OpenSave();
-    } else {
+        // A Termina file left from an earlier combined file in this slot (erased or made again in Hyrule) belongs to
+        // another seed: start Termina fresh for this one instead of refusing to load.
+        opened = belongsToSeed();
+    }
+    if (!opened) {
         fresh = true;
         FleetAutomaticSave automatic;
         Sram_InitNamedSave(arrival.slot, kDefaultPlayerName);
@@ -117,8 +127,7 @@ void BootIntoPlay(const Arrival& arrival) {
         FleetRuntime_Save();
     }
     gSaveContext.gameMode = GAMEMODE_NORMAL;
-    if (FleetRuntime_HasSession() && (!IS_RANDO || gSaveContext.save.shipSaveInfo.rando.finalSeed !=
-                                                       FleetRuntime_Seed().at("masterSeed").get<uint32_t>())) {
+    if (!belongsToSeed()) {
         throw std::runtime_error("MM save does not belong to this Fleet seed");
     }
     Sram_PrepareLoadedSave();
